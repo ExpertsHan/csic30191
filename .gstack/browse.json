@@ -1,8 +1,8 @@
 {
-  "pid": 75431,
-  "port": 42929,
-  "token": "d7db3d55-153d-46c0-a23f-2a7e88687e21",
-  "startedAt": "2026-09-24T06:25:17.916Z",
+  "pid": 78366,
+  "port": 19848,
+  "token": "a851d72a-33a6-453b-b88c-a78ac821093f",
+  "startedAt": "2026-09-24T08:11:45.838Z",
   "serverPath": "/Users/zhanjiahan/.agents/skills/gstack/browse/src/server.ts",
   "mode": "launched"
 }
