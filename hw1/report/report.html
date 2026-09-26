@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>Lab1 DDPM Report</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});document.body.dataset.ready=1"></script>
+<style>
+  @page { size: A4; margin: 16mm 15mm; }
+  body { font-family: -apple-system, "PingFang TC", "Heiti TC", sans-serif; font-size: 10.5pt; line-height: 1.55; color: #111; }
+  h1 { font-size: 20pt; margin: 0 0 4px; }
+  h2 { font-size: 15pt; border-bottom: 2px solid #333; padding-bottom: 3px; margin-top: 22px; page-break-after: avoid; }
+  h3 { font-size: 12pt; margin: 16px 0 6px; page-break-after: avoid; }
+  h4 { font-size: 10.5pt; margin: 12px 0 4px; page-break-after: avoid; }
+  .meta { color: #444; margin-bottom: 10px; }
+  pre { background: #f5f5f5; border: 1px solid #ddd; border-radius: 4px; padding: 7px 9px; font-size: 8.6pt; line-height: 1.4; white-space: pre-wrap; page-break-inside: avoid; margin: 6px 0; }
+  code { font-family: Menlo, monospace; font-size: 9pt; }
+  table { border-collapse: collapse; margin: 8px 0; page-break-inside: avoid; }
+  th, td { border: 1px solid #999; padding: 3px 8px; text-align: center; font-size: 9.5pt; }
+  th { background: #eee; }
+  figure { margin: 8px 0; text-align: center; page-break-inside: avoid; }
+  figure img { max-width: 100%; }
+  figcaption { font-size: 9pt; color: #444; margin-top: 3px; }
+  .row { display: flex; gap: 8px; align-items: flex-start; }
+  .row figure { flex: 1; }
+  .lbl { display: grid; grid-template-columns: 105px 1fr; gap: 4px 8px; align-items: center; page-break-inside: avoid; margin: 6px 0; }
+  .lbl div { font-size: 9pt; font-weight: 600; text-align: right; }
+  .lbl img { width: 100%; image-rendering: pixelated; }
+  .best { background: #fff3c4; font-weight: 700; }
+  .pb { page-break-before: always; }
+  ul { margin: 4px 0; padding-left: 20px; }
+</style>
+</head>
+<body>
+
+<h1>Lab1 – Denoising Diffusion Probabilistic Models</h1>
+<div class="meta">學號：114550109　姓名：詹佳翰</div>
+
+<table>
+  <tr><th>項目</th><th>結果</th></tr>
+  <tr><td>Task 1 Chamfer Distance（門檻 &lt; 20）</td><td><b>6.7868</b></td></tr>
+  <tr><td>Task 2 最佳 FID（quad schedule + noise predictor）</td><td><b>0.8252</b></td></tr>
+</table>
+
+<!-- ============================ TASK 1 ============================ -->
+<h2>Task 1 – Swiss Roll（2D DDPM）</h2>
+
+<h3>1.1 TODO 實作與說明</h3>
+
+<h4>TODO #1 <code>SimpleNet</code>（<code>network.py</code>）</h4>
+<pre>dims = [dim_in] + list(dim_hids) + [dim_out]          # [2, 128, 128, 128, 2]
+self.layers = nn.ModuleList([TimeLinear(dims[i], dims[i+1], num_timesteps)
+                             for i in range(len(dims) - 1)])
+self.act = nn.SiLU()
+# forward
+for i, layer in enumerate(self.layers):
+    x = layer(x, t)
+    if i &lt; len(self.layers) - 1:      # 輸出層不加 activation
+        x = self.act(x)</pre>
+<ul>
+  <li>網路是 4 層 <code>TimeLinear</code>（2→128→128→128→2），輸入 $x_t$，輸出同維度的雜訊預測 $\epsilon_\theta(x_t,t)$。</li>
+  <li><code>TimeLinear</code> 會把 timestep $t$ 做 embedding 後乘在線性層的輸出上，讓每一層都知道目前的雜訊強度。因為每層都要額外吃 $t$，所以用 <code>nn.ModuleList</code> 自己跑迴圈，不能用 <code>nn.Sequential</code>。</li>
+  <li>中間層接 SiLU。最後一層不加 activation，因為要預測的 $\epsilon\sim\mathcal N(0,I)$ 可正可負、沒有值域限制。</li>
+</ul>
+
+<h4>TODO #2 <code>q_sample</code>（forward process）</h4>
+<p>由 $q(x_t|x_0)=\mathcal N\!\big(\sqrt{\bar\alpha_t}\,x_0,\,(1-\bar\alpha_t)I\big)$ 用 reparameterization 一步取樣：
+$$x_t=\sqrt{\bar\alpha_t}\,x_0+\sqrt{1-\bar\alpha_t}\,\epsilon,\qquad \epsilon\sim\mathcal N(0,I)$$</p>
+<pre>alphas_prod_t = extract(self.var_scheduler.alphas_cumprod, t, x0)   # (B,1)
+xt = alphas_prod_t.sqrt() * x0 + (1 - alphas_prod_t).sqrt() * noise</pre>
+<p><code>extract</code> 會依每筆資料各自的 $t$ 取出 $\bar\alpha_t$，並 reshape 成 <code>(B,1)</code>，和 <code>(B,2)</code> 的 $x_0$ broadcasting 相乘。因為有這條閉式解，訓練時不需要真的迭代 $t$ 步。</p>
+
+<h4>TODO #3 <code>p_sample</code>（reverse 一步 $x_t\to x_{t-1}$）</h4>
+<p>DDPM Eq. 11：
+$$\mu_\theta(x_t,t)=\frac{1}{\sqrt{\alpha_t}}\Big(x_t-\frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\epsilon_\theta(x_t,t)\Big),\quad
+\tilde\beta_t=\frac{1-\bar\alpha_{t-1}}{1-\bar\alpha_t}\beta_t,\quad
+x_{t-1}=\mu_\theta+\sqrt{\tilde\beta_t}\,z$$</p>
+<pre>eps_theta = self.network(xt, t)                                  # 1. 預測雜訊
+mean = (xt - eps_factor * eps_theta) / alpha_t.sqrt()            # 2. posterior mean
+var  = (1 - alpha_bar_t_prev) / (1 - alpha_bar_t) * beta_t        # 3. posterior variance
+z = torch.randn_like(xt)
+nonzero_mask = (t != 0).float().view(-1, *([1] * (xt.dim() - 1)))
+x_t_prev = mean + nonzero_mask * var.sqrt() * z                  # 4. t=0 不加雜訊</pre>
+<ul>
+  <li><code>eps_factor</code> $=\frac{1-\alpha_t}{\sqrt{1-\bar\alpha_t}}=\frac{\beta_t}{\sqrt{1-\bar\alpha_t}}$，就是 Eq. 11 裡 $\epsilon_\theta$ 前的係數。</li>
+  <li>變異數用 posterior variance $\tilde\beta_t$（論文指出 $\sigma_t^2=\beta_t$ 或 $\tilde\beta_t$ 結果相近）。</li>
+  <li><code>nonzero_mask</code>：最後一步 $t=0$ 直接輸出 mean，不再加隨機雜訊，得到乾淨的 $x_0$。</li>
+</ul>
+
+<h4>TODO #4 <code>p_sample_loop</code>（DDPM Algorithm 2）</h4>
+<pre>xt = torch.randn(shape).to(self.device)                            # x_T ~ N(0, I)
+for t in range(self.var_scheduler.num_train_timesteps - 1, -1, -1):  # 999 → 0
+    xt = self.p_sample(xt, t)
+x0_pred = xt</pre>
+<p>從標準常態分佈出發，連續呼叫 <code>p_sample</code> 做 1000 次去噪，最後得到的就是生成樣本。</p>
+
+<h4>TODO #5 <code>compute_loss</code>（DDPM Eq. 14，simple loss）</h4>
+<p>$$L_{\text{simple}}=\mathbb E_{t,x_0,\epsilon}\big\|\epsilon-\epsilon_\theta(\sqrt{\bar\alpha_t}x_0+\sqrt{1-\bar\alpha_t}\epsilon,\ t)\big\|^2$$</p>
+<pre>t = torch.randint(0, num_train_timesteps, size=(batch_size,))  # 1. 均勻抽 t
+eps = torch.randn_like(x0)                                     # 2. 真正加進去的雜訊
+x_t = self.q_sample(x0, t, noise=eps)
+eps_pred = self.network(x_t, t)                                # 3. 網路預測雜訊
+loss = F.mse_loss(eps_pred, eps)                               # 4. MSE</pre>
+<p>每個 batch 對每筆資料獨立抽一個 $t$，所以一個 batch 同時訓練到各種雜訊強度。網路的目標是從 $x_t$ 還原出當初加進去的 $\epsilon$。</p>
+
+<h3>1.2 q_sample 視覺化</h3>
+<figure>
+  <img src="fig/report_q_sample.png">
+  <figcaption>Fig. 1：$q(x_t|x_0)$，t = 0, 50, …, 450。螺旋（Swiss roll）隨 $t$ 增加逐漸被雜訊蓋過，最後趨近各向同性的高斯分佈，和投影片的參考圖一致。</figcaption>
+</figure>
+
+<h3>1.3 Loss 曲線與生成分佈</h3>
+<div class="row">
+  <figure><img src="fig/report_loss_curve.png"><figcaption>Fig. 2：訓練 loss（5000 iterations）。loss 很快從約 1 降下來，之後在低點震盪（最後約 0.34）。</figcaption></figure>
+  <figure><img src="fig/report_samples.png"><figcaption>Fig. 3：藍色為目標分佈，橘色為 DDPM 生成的 2048 個點。<br><b>Chamfer Distance = 6.7868</b>（&lt; 20）。</figcaption></figure>
+</div>
+<p>生成的點幾乎完整覆蓋整條螺旋，只有少量點落在螺旋外。simple loss 的最小值不是 0：同一個 $x_t$ 可能來自不同的 $(x_0,\epsilon)$ 組合，所以 $\epsilon$ 本身無法被完全確定，loss 收斂到一個非零的平台是正常的。</p>
+
+<!-- ============================ TASK 2 ============================ -->
+<h2 class="pb">Task 2 – Image Generation（AFHQ 64×64）</h2>
+
+<h3>2.1 TODO 實作與說明</h3>
+
+<h4>TODO #1 <code>add_noise</code>（<code>scheduler.py</code>）</h4>
+<pre>alpha_bar_t = extract(self.alphas_cumprod, t, x_0)            # [B,1,1,1]
+x_t = alpha_bar_t.sqrt() * x_0 + (1 - alpha_bar_t).sqrt() * eps</pre>
+<p>和 Task 1 的 <code>q_sample</code> 是同一條公式 $x_t=\sqrt{\bar\alpha_t}x_0+\sqrt{1-\bar\alpha_t}\epsilon$，只是資料變成 <code>[B,C,H,W]</code> 的影像，<code>extract</code> 會 reshape 成 <code>[B,1,1,1]</code> 做 broadcasting。函式同時回傳 <code>eps</code>，讓 loss 可以拿它當 ground truth。</p>
+
+<h4>TODO #2 Cosine beta schedule（Nichol &amp; Dhariwal, 2021）</h4>
+<p>$$f(t)=\cos^2\!\Big(\frac{t/T+s}{1+s}\cdot\frac{\pi}{2}\Big),\quad \bar\alpha_t=\frac{f(t)}{f(0)},\quad \beta_t=\min\!\Big(1-\frac{\bar\alpha_t}{\bar\alpha_{t-1}},\ 0.999\Big),\quad s=0.008$$</p>
+<pre>s = 0.008
+steps = torch.arange(num_train_timesteps + 1, dtype=torch.float64)       # t = 0..T
+f = torch.cos(((steps / num_train_timesteps) + s) / (1 + s) * torch.pi / 2) ** 2
+alphas_cumprod = f / f[0]                                                # ᾱ_0 = 1
+betas = 1 - alphas_cumprod[1:] / alphas_cumprod[:-1]                     # T 個 β
+betas = betas.clamp(max=0.999).float()</pre>
+<ul>
+  <li>cosine schedule 是直接設計 $\bar\alpha_t$，再反推 $\beta_t$。算 $T$ 個 $\beta_t$ 需要 $T+1$ 個 $\bar\alpha$，所以 <code>steps</code> 取 0..T。</li>
+  <li>除以 $f(0)$ 讓 $\bar\alpha_0=1$；小位移 $s$ 避免 $t$ 接近 0 時 $\beta_t$ 太小。</li>
+  <li>$t\to T$ 時 $\bar\alpha_t\to0$，比值會讓 $\beta_t\to1$，所以 clip 到 0.999。用 float64 計算，避免 $\bar\alpha$ 很小時相除產生數值誤差，最後再轉回 float32。</li>
+</ul>
+
+<h4>TODO #3 三種 predictor 的 reverse step</h4>
+<p>三種參數化最後都要算出 posterior $q(x_{t-1}|x_t,x_0)=\mathcal N(\tilde\mu_t,\tilde\beta_tI)$（DDPM Eq. 7）：
+$$\tilde\mu_t(x_t,x_0)=\frac{\sqrt{\bar\alpha_{t-1}}\beta_t}{1-\bar\alpha_t}x_0+\frac{\sqrt{\alpha_t}(1-\bar\alpha_{t-1})}{1-\bar\alpha_t}x_t,\qquad
+\tilde\beta_t=\frac{1-\bar\alpha_{t-1}}{1-\bar\alpha_t}\beta_t$$
+差別只在網路輸出的是哪一個量，所以我把共用的部分抽成 helper：</p>
+<pre>def _alpha_bar_prev(self, t, x_t):             # ᾱ_{t-1}，t = 0 時定義為 1
+    prev = extract(self.alphas_cumprod, (t - 1).clamp(min=0), x_t)
+    return torch.where((t == 0).view(prev.shape), torch.ones_like(prev), prev)
+
+def _posterior_mean(self, x_t, t, x0_pred):    # μ̃_t
+    return (ab_prev.sqrt() * beta_t / (1 - ab_t) * x0_pred
+            + alpha_t.sqrt() * (1 - ab_prev) / (1 - ab_t) * x_t)
+
+def _posterior_variance(self, x_t, t):         # β̃_t
+    return (1 - ab_prev) / (1 - ab_t) * beta_t
+
+def _add_posterior_noise(self, mean, var, t):  # t = 0 不加雜訊
+    z = torch.randn_like(mean)
+    nonzero_mask = (t != 0).float().view(-1, *([1] * (mean.dim() - 1)))
+    return mean + nonzero_mask * var.sqrt() * z
+
+def _posterior_sample(self, x_t, t, x0_pred):
+    x0_pred = x0_pred.clamp(-1, 1)
+    return self._add_posterior_noise(self._posterior_mean(x_t, t, x0_pred),
+                                     self._posterior_variance(x_t, t), t)</pre>
+<ul>
+  <li><b>noise predictor</b>：先由 $x_t=\sqrt{\bar\alpha_t}x_0+\sqrt{1-\bar\alpha_t}\epsilon$ 反解出 $\hat x_0=\dfrac{x_t-\sqrt{1-\bar\alpha_t}\,\hat\epsilon_\theta}{\sqrt{\bar\alpha_t}}$，再丟進 <code>_posterior_sample</code>。
+<pre>x0_pred = (x_t - (1 - alpha_bar_t).sqrt() * eps_theta) / alpha_bar_t.sqrt()
+sample_prev = self._posterior_sample(x_t, t, x0_pred)</pre></li>
+  <li><b>x0 predictor</b>：網路直接輸出 $\hat x_0$，直接呼叫 <code>self._posterior_sample(x_t, t, x0_pred)</code>。</li>
+  <li><b>mean predictor</b>：網路直接輸出 $\mu_\theta\approx\tilde\mu_t$，只需要補上 $\tilde\beta_t$ 的雜訊：<code>_add_posterior_noise(mean_theta, _posterior_variance(x_t, t), t)</code>。</li>
+  <li><code>clamp(-1,1)</code>：訓練影像被 normalize 到 $[-1,1]$，$\hat x_0$ 超出範圍一定是錯的，強制拉回可以避免誤差在 1000 步裡累積放大。</li>
+  <li>$\bar\alpha_{-1}=1$：在 $t=0$ 時 $\tilde\beta_0=0$、$\tilde\mu_0=\hat x_0$，最後一步直接輸出預測的乾淨影像。</li>
+  <li><code>step()</code> 會先把 $t$ 統一轉成 device 上的 1-D tensor，再依 <code>predictor</code> 字串分派到上面三個函式。</li>
+</ul>
+
+<h4>TODO #4 三種 predictor 的 loss（<code>model.py</code>）</h4>
+<table>
+  <tr><th>predictor</th><th>網路輸出</th><th>regression target</th></tr>
+  <tr><td>noise（已提供）</td><td>$\hat\epsilon_\theta(x_t,t)$</td><td>$\epsilon$</td></tr>
+  <tr><td>x0</td><td>$\hat x_\theta(x_t,t)$</td><td>$x_0$</td></tr>
+  <tr><td>mean</td><td>$\mu_\theta(x_t,t)$</td><td>$\tilde\mu_t=\frac{1}{\sqrt{\alpha_t}}\big(x_t-\frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\epsilon\big)$</td></tr>
+</table>
+<pre>def get_loss_x0(self, x0, class_label=None, noise=None):
+    t = self.var_scheduler.uniform_sample_t(B, x0.device)
+    x_t, _ = self.var_scheduler.add_noise(x0, t, eps=noise)
+    x0_pred = self.network(x_t, t)
+    return F.mse_loss(x0_pred, x0)
+
+def get_loss_mean(self, x0, class_label=None, noise=None):
+    t = self.var_scheduler.uniform_sample_t(B, x0.device)
+    x_t, eps = self.var_scheduler.add_noise(x0, t, eps=noise)
+    mean_pred = self.network(x_t, t)
+    mean_true = (x_t - beta_t / (1 - alpha_bar_t).sqrt() * eps) / alpha_t.sqrt()
+    return F.mse_loss(mean_pred, mean_true)</pre>
+<p>mean predictor 的 target 用的是閉式 $\tilde\mu_t(x_t,x_0)$。把 $x_0=\frac{x_t-\sqrt{1-\bar\alpha_t}\epsilon}{\sqrt{\bar\alpha_t}}$ 代入 Eq. 7 化簡，就得到上面只含 $x_t$ 與 $\epsilon$ 的形式（DDPM Eq. 10），和 Eq. 7 數學上完全相等，而且直接用真正加入的 $\epsilon$，不需要再算一次 $x_0$。</p>
+<p>正確性驗證：<code>pytest tests/test_todo.py</code> 共 <b>28 passed</b>，數值與助教提供的參考輸出一致。</p>
+
+<h3>2.2 實驗設定</h3>
+<table>
+  <tr><th>參數</th><th>值</th><th>參數</th><th>值</th></tr>
+  <tr><td>train_num_steps</td><td>100,000</td><td>batch_size</td><td>16</td></tr>
+  <tr><td>$T$</td><td>1000</td><td>$\beta_1,\ \beta_T$（linear / quad）</td><td>1e-4, 0.02</td></tr>
+  <tr><td>resolution</td><td>64×64</td><td>warmup_steps</td><td>200</td></tr>
+  <tr><td>sampler</td><td>DDPM（1000 steps）</td><td>FID 樣本數</td><td>500 張 vs. AFHQ val（eval set）</td></tr>
+</table>
+<p>共訓練 5 組模型：{linear, quad, cosine} × noise predictor，以及 linear × {x0, mean} predictor。</p>
+
+<h3>2.3 三種 beta schedule 的比較</h3>
+<figure>
+  <img src="fig/schedules.png" style="width:88%">
+  <figcaption>Fig. 4：三種 schedule 的 $\bar\alpha_t$（左）與 $\beta_t$（右，log scale）。</figcaption>
+</figure>
+<table>
+  <tr><th>schedule</th><th>$\bar\alpha_{500}$</th><th>$\bar\alpha_T$</th></tr>
+  <tr><td>linear</td><td>0.079</td><td>4.0e-5</td></tr>
+  <tr><td>quad</td><td>0.333</td><td>7.3e-4</td></tr>
+  <tr><td>cosine</td><td>0.494</td><td>2.4e-9</td></tr>
+</table>
+
+<h4>Reverse trajectory（最終 checkpoint，左 $t=T$ → 右 $t=0$，每格約間隔 111 步）</h4>
+<div class="lbl">
+  <div>linear</div><img src="fig/traj_linear_noise.png">
+  <div>quad</div><img src="fig/traj_quad_noise.png">
+  <div>cosine</div><img src="fig/traj_cosine_noise.png">
+</div>
+<figcaption style="text-align:center">Fig. 5：三種 schedule（皆為 noise predictor）的去噪軌跡。</figcaption>
+
+<h4>每組 8 張生成結果</h4>
+<div class="lbl">
+  <div>linear</div><img src="fig/samples8_linear_noise.png">
+  <div>quad</div><img src="fig/samples8_quad_noise.png">
+  <div>cosine</div><img src="fig/samples8_cosine_noise.png">
+</div>
+
+<table>
+  <tr><th>schedule（noise predictor）</th><th>FID ↓</th></tr>
+  <tr><td>linear</td><td>14.3071</td></tr>
+  <tr class="best"><td>quad</td><td>0.8252</td></tr>
+  <tr><td>cosine</td><td>6.6765</td></tr>
+</table>
+
+<p><b>觀察與討論：</b></p>
+<ul>
+  <li><b>linear</b>：$\bar\alpha_t$ 下降得最快，$t=500$ 時已經只剩 $\bar\alpha\approx0.08$，所以 reverse 軌跡的前 6～7 格幾乎都是純雜訊，動物輪廓到最後 3 格才突然浮現。大部分的 timestep 花在「幾乎看不到訊號」的區間，真正決定影像結構和細節的步數比較少。</li>
+  <li><b>quad</b>：$\beta_t$ 從 $\sqrt{\beta}$ 線性內插再平方，前段的 $\beta$ 比 linear 小很多，$\bar\alpha_t$ 衰減較慢（$\bar\alpha_{500}\approx0.33$）。軌跡約在中段（第 5 格）就出現輪廓，之後逐步補上細節。</li>
+  <li><b>cosine</b>：$\bar\alpha_t$ 在中段近似線性下降、兩端平緩，雜訊強度在各 timestep 分佈最均勻。軌跡最早（第 3～4 格）出現輪廓，整個過程是由粗到細平滑演變。另外 $\bar\alpha_T\approx2\times10^{-9}$，$x_T$ 最接近純高斯，和取樣起點 $\mathcal N(0,I)$ 最一致。</li>
+  <li>從生成結果看，三種 schedule 都能產生清楚的動物臉。FID 排名為 quad（0.83）&lt; cosine（6.68）&lt; linear（14.31），三者都低於 15，但 linear 明顯最差。我也在本機用同一個 AFHQ Inception 權重計算各組生成圖之間的 FID：quad 與 cosine 之間只有 3.7，但兩者和 linear 之間分別是 16.5 和 19.2，表示 quad／cosine 的輸出分佈很接近，linear 則偏離較多。原因應該就是上面提到的：linear 把太多步數浪費在高雜訊區，對細節的建模較不足。</li>
+</ul>
+
+<h4>訓練過程中的 trajectory（linear + noise）</h4>
+<figure>
+  <img src="fig/traj_training_linear.png" style="width:80%;image-rendering:pixelated">
+  <figcaption>Fig. 6：由上到下為訓練 step 5k、20k、50k、95k 時的去噪軌跡。5k 步已經有模糊的色塊與輪廓，隨訓練進行細節（眼睛、毛色、背景）越來越清楚。</figcaption>
+</figure>
+
+<h3 class="pb">2.4 三種 predictor 的比較（linear schedule）</h3>
+<div class="lbl">
+  <div>noise</div><img src="fig/samples8_linear_noise.png">
+  <div>x0</div><img src="fig/samples8_linear_x0.png">
+  <div>mean</div><img src="fig/samples8_linear_mean.png">
+</div>
+<figcaption style="text-align:center">Fig. 7：三種 predictor 各 8 張生成結果（共 24 張）。</figcaption>
+
+<div class="lbl">
+  <div>noise</div><img src="fig/traj_linear_noise.png">
+  <div>x0</div><img src="fig/traj_linear_x0.png">
+  <div>mean</div><img src="fig/traj_linear_mean.png">
+</div>
+<figcaption style="text-align:center">Fig. 8：三種 predictor 的去噪軌跡。</figcaption>
+
+<div class="row">
+  <figure><img src="fig/loss_linear_noise.png"><figcaption>noise loss</figcaption></figure>
+  <figure><img src="fig/loss_linear_x0.png"><figcaption>x0 loss</figcaption></figure>
+  <figure><img src="fig/loss_linear_mean.png"><figcaption>mean loss</figcaption></figure>
+</div>
+<figcaption style="text-align:center">Fig. 9：三種 predictor 的訓練 loss（target 尺度不同，數值不能直接互比）。</figcaption>
+
+<table>
+  <tr><th>predictor（linear schedule）</th><th>FID ↓</th></tr>
+  <tr><td>noise</td><td>14.3071</td></tr>
+  <tr><td>x0</td><td>13.8030</td></tr>
+  <tr><td>mean</td><td>49.4326</td></tr>
+</table>
+
+<p><b>觀察與討論：</b></p>
+<ul>
+  <li><b>noise predictor</b>：target $\epsilon\sim\mathcal N(0,I)$，不論 $t$ 為何尺度都固定為單位變異數，對網路來說是一個條件良好的回歸問題。loss 很快降到 0.1 以下並穩定震盪，生成結果清楚、多樣（貓、狗、野生動物都有）。</li>
+  <li><b>x0 predictor</b>：同樣能生成可辨識的動物臉，但整體紋理偏平滑、像塗抹過的水彩，毛髮等高頻細節較少，部分樣本的臉部結構也不自然（Fig. 7 x0 列第 3、4、7 張五官扭曲或殘缺）。原因是 $t$ 很大時要從幾乎純雜訊直接猜整張 $x_0$，MSE 的最佳解是「所有可能 $x_0$ 的條件平均」，所以預測偏模糊。loss 維持在 0.05～0.15 之間，比 noise 版本高、震盪也大。不過因為取樣時每一步只取 $\tilde\mu_t$ 的一小部分 $\hat x_0$，再加上 <code>clamp(-1,1)</code>，錯誤能逐步被修正，最終品質仍然不錯。
+    <br>值得注意的是，x0 的 FID（13.80）反而比 noise（14.31）略低。我的解讀是：評估用的 Inception 是在 AFHQ 上 fine-tune 過的（最後接 3 類 cat/dog/wild 分類頭），特徵偏重「物種、臉部整體結構與色彩」這類語意資訊，對毛髮等高頻紋理不敏感。x0 版本的模糊正好落在這個指標不太懲罰的地方，而它的語意分佈和真實資料相當接近（本機計算 x0 與 quad、cosine 生成圖之間的 FID 只有 9.3、4.0，比 noise 與它們之間的 16.5、19.2 還小）。因此在這個 FID 下兩者差距不大，但肉眼看 noise predictor 的細節明顯較好，FID 也不能完全代表影像的清晰度。</li>
+  <li><b>mean predictor</b>：完全失敗，輸出是帶色塊的雜訊圖，軌跡也從頭到尾沒有出現影像結構。從 loss 曲線可以看出原因：
+    <ol>
+      <li>$\tilde\mu_t=\frac{1}{\sqrt{\alpha_t}}x_t-\frac{\beta_t}{\sqrt{\alpha_t}\sqrt{1-\bar\alpha_t}}\epsilon$，而 $\beta_t\le0.02$，所以 target 幾乎就是 $x_t$ 本身，真正有用的去噪資訊只佔很小的尺度。loss 大多數時候接近 0（網路只要學會近似恆等映射就能拿到很低的 loss），梯度對「該往哪個方向去噪」幾乎沒有指導力。</li>
+      <li>loss 曲線多次突然跳到約 1 再掉回來，代表訓練不穩定、會反覆發散。</li>
+      <li>取樣時每一步的微小誤差不會像 x0／noise 版本那樣經過 clamp 修正，1000 步累積之後完全偏離資料流形。</li>
+    </ol>
+    這個結果和 DDPM 論文 Table 2 一致：作者指出用 unweighted MSE 直接預測 $\tilde\mu$ 會 <i>training unstable</i>，只有用真正的 variational bound（含 timestep 權重）才能訓練；這也是論文改用 $\epsilon$ 參數化的主要動機。</li>
+</ul>
+
+<h3 class="pb">2.5 最佳 FID 截圖</h3>
+<p>最佳結果為 <b>quad schedule + noise predictor，FID = 0.8252</b>（&lt; 15）。</p>
+<figure>
+  <img src="fig/fid_quad.png">
+  <figcaption>Fig. 10：quad + noise 的 FID 計算結果（<code>python fid/measure_fid.py data/afhq/eval samples/quad_noise</code>）。</figcaption>
+</figure>
+<figure>
+  <img src="fig/fid_linear.png">
+  <figcaption>Fig. 11：linear + noise 的 FID 計算結果（14.3071，同樣 &lt; 15）。</figcaption>
+</figure>
+<p>比對 eval set（AFHQ val 經 <code>dataset.py</code> 轉成 64×64，約 1500 張，對應 24 個 batch）與 500 張生成影像（8 個 batch）。FID 使用助教提供、在 AFHQ 上 fine-tune 過的 Inception-v3 特徵。</p>
+
+</body>
+</html>
