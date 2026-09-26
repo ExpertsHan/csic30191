@@ -444,13 +444,13 @@ lab$ CUDA_VISIBLE_DEVICES=0 python fid/measure_fid.py data/afhq/eval samples/lin
 
 其他 4 組照樣替換路徑與資料夾名稱：
 
-| 組別 | checkpoint 資料夾 | `--save_dir`（FID / 8 張） |
-|---|---|---|
+| 組別             | checkpoint 資料夾                         | `--save_dir`（FID / 8 張）                         |
+| -------------- | -------------------------------------- | ----------------------------------------------- |
 | linear + noise | `results/predictor_noise/beta_linear/` | `samples/linear_noise`、`samples/linear_noise_8` |
-| quad + noise | `results/predictor_noise/beta_quad/` | `samples/quad_noise`、`samples/quad_noise_8` |
+| quad + noise   | `results/predictor_noise/beta_quad/`   | `samples/quad_noise`、`samples/quad_noise_8`     |
 | cosine + noise | `results/predictor_noise/beta_cosine/` | `samples/cosine_noise`、`samples/cosine_noise_8` |
-| linear + x0 | `results/predictor_x0/beta_linear/` | `samples/linear_x0`、`samples/linear_x0_8` |
-| linear + mean | `results/predictor_mean/beta_linear/` | `samples/linear_mean`、`samples/linear_mean_8` |
+| linear + x0    | `results/predictor_x0/beta_linear/`    | `、`samples/linear_x0_8`                         |
+| linear + mean  | `results/predictor_mean/beta_linear/`  | `samples/linear_mean`、`samples/linear_mean_8`   |
 
 FID 評分：
 
