@@ -1,1 +1,0 @@
-[2026-09-24T08:11:46.908Z] [error] Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of "text/css". Strict MIME type checking is enforced for module scripts per HTML spec.
